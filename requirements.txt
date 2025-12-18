@@ -1,0 +1,9 @@
+langchain
+langchain-openai
+langchain-community
+langgraph
+pydantic
+pyyaml
+faiss-cpu
+tiktoken
+sqlalchemy

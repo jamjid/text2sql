@@ -1,0 +1,19 @@
+# .gitignore
+
+# 1. 忽略 Python 缓存和虚拟环境
+__pycache__/
+venv/
+.env
+
+# 2. 忽略本地数据库 (通常不传二进制文件，除非是极小的 Demo)
+*.db
+ecommerce.db
+
+# 3. 忽略包含敏感信息的配置文件
+# 我们只上传配置模板，不上传真实的 dev.yaml (如果里面填了 Key)
+# 如果你的 dev.yaml 里只写了环境变量引用，没有硬编码 Key，那可以上传
+# 建议做法：忽略 dev.yaml，上传 dev.yaml.example
+dev.yaml
+
+# 4. 系统文件
+.DS_Store

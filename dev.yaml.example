@@ -1,0 +1,14 @@
+# dev.yaml.example
+app:
+  name: "Text2SQL_Agent_Demo"
+  env: "dev"
+
+llm:
+  model_name: "gpt-4o-mini"
+  temperature: 0
+
+logging:
+  file_path: "logs/query_audit.jsonl"
+
+db:
+  uri: "sqlite:///ecommerce.db" # 用户需要自己创建这个数据库
