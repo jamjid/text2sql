@@ -1,7 +1,9 @@
 # ============================================
 # NL2SQL Enterprise Agent (RAG + ReAct + Time-Aware)
 # ============================================
+
 import os
+import re
 import yaml
 import json
 import datetime
@@ -12,74 +14,53 @@ from typing import TypedDict, Annotated, List, Literal, Optional
 # --- LangChain / LangGraph Imports ---
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from langchain_core.documents import Document
 from langgraph.graph import StateGraph, END
 from langchain_community.utilities import SQLDatabase
 from langchain_community.vectorstores import FAISS
 
-import sqlite3
-import os
-
 # ==========================================
-# 自动初始化数据库
+# 0. 自动初始化数据库
 # ==========================================
 def auto_initialize_database(db_path="ecommerce.db"):
     """
     检查数据库是否存在，如果不存在则自动创建并写入测试数据。
     """
+    # 1. 尝试连接并检查表数量
+    has_tables = False
     if os.path.exists(db_path):
-        print(f"📦 [System] 检测到数据库 {db_path} 已存在，跳过初始化。")
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            # 查询 sqlite_master 表看有没有用户表
+            cursor.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+            if cursor.fetchone()[0] > 0:
+                has_tables = True
+        except Exception:
+            pass
+
+    if has_tables:
+        print(f"📦 [System] 检测到数据库 {db_path} 完整 (包含表)，跳过初始化。")
         return
 
-    print(f"📦 [System] 未检测到数据库，正在自动生成 {db_path} ...")
-    
+    print(f"📦 [System] 正在初始化 {db_path} ...")
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
     # 定义建表和初始化数据的 SQL
     init_script = """
-    -- 创建 Customers 表
-    CREATE TABLE IF NOT EXISTS customers (
-        id INTEGER PRIMARY KEY, 
-        name VARCHAR(50), 
-        age INTEGER, 
-        city VARCHAR(50)
-    );
-    
-    -- 创建 Orders 表
-    CREATE TABLE IF NOT EXISTS orders (
-        order_id INTEGER PRIMARY KEY, 
-        customer_id INTEGER, 
-        product VARCHAR(50), 
-        amount DECIMAL(10, 2), 
-        order_date DATE,
-        FOREIGN KEY(customer_id) REFERENCES customers(id)
-    );
-    
-    -- 插入测试数据 (Customers)
-    INSERT INTO customers (id, name, age, city) VALUES 
-        (1, 'Alice', 30, 'New York'),
-        (2, 'Bob', 25, 'Los Angeles'),
-        (3, 'Charlie', 35, 'Chicago'),
-        (4, 'Diana', 28, 'New York');
-        
-    -- 插入测试数据 (Orders)
-    INSERT INTO orders (order_id, customer_id, product, amount, order_date) VALUES 
-        (101, 1, 'Laptop', 1200.00, '2023-10-01'),
-        (102, 1, 'Mouse', 25.00, '2023-10-02'),
-        (103, 2, 'Smartphone', 800.00, '2023-10-03'),
-        (104, 1, 'Keyboard', 100.00, '2023-10-05'),
-        (105, 3, 'Headphones', 150.00, '2023-10-06'),
-        (106, 4, 'Monitor', 300.00, '2023-10-07');
+    CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY, name VARCHAR(50), age INTEGER, city VARCHAR(50));
+    CREATE TABLE IF NOT EXISTS orders (order_id INTEGER PRIMARY KEY, customer_id INTEGER, product VARCHAR(50), amount DECIMAL(10, 2), order_date DATE, FOREIGN KEY(customer_id) REFERENCES customers(id));
+    INSERT INTO customers (id, name, age, city) VALUES (1, 'Alice', 30, 'New York'), (2, 'Bob', 25, 'Los Angeles'), (3, 'Charlie', 35, 'Chicago'), (4, 'Diana', 28, 'New York');
+    INSERT INTO orders (order_id, customer_id, product, amount, order_date) VALUES (101, 1, 'Laptop', 1200.00, '2023-10-01'), (102, 1, 'Mouse', 25.00, '2023-10-02'), (103, 2, 'Smartphone', 800.00, '2023-10-03'), (104, 1, 'Keyboard', 100.00, '2023-10-05'), (105, 3, 'Headphones', 150.00, '2023-10-06'), (106, 4, 'Monitor', 300.00, '2023-10-07');
     """
-    
     try:
         cursor.executescript(init_script)
         conn.commit()
-        print(f"   ✅ 数据库初始化完成！已写入测试数据。")
+        print(f"   ✅ 数据库初始化完成。")
     except Exception as e:
-        print(f"   ❌ 数据库初始化失败: {e}")
+        print(f"   ❌ 初始化失败: {e}")
     finally:
         conn.close()
 
@@ -98,10 +79,20 @@ class ConfigManager:
 
     def _load_config(self, path="dev.yaml"):
         if not os.path.exists(path):
-            raise FileNotFoundError(f"CRITICAL: 配置文件 {path} 不存在！")
-        
-        with open(path, 'r', encoding='utf-8') as f:
-            self._config = yaml.safe_load(f)
+            # 为了防止直接运行报错，这里提供一个默认配置写回
+            print(f"⚠️ {path} 不存在，正在生成默认配置...")
+            default_config = {
+                "app": {"name": "Text2SQL", "env": "dev"},
+                "llm": {"model_name": "gpt-4o-mini", "temperature": 0.2},
+                "logging": {"file_path": "logs/query_audit.jsonl"},
+                "db": {"uri": "sqlite:///ecommerce.db"}
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                yaml.dump(default_config, f)
+            self._config = default_config
+        else:
+            with open(path, 'r', encoding='utf-8') as f:
+                self._config = yaml.safe_load(f)
         
         log_path = self._config['logging']['file_path']
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -130,6 +121,15 @@ class DBManager:
     def db(self):
         return self._db
 
+    def refresh_db_connection(self):
+        """
+        当底层数据库发生变动（如新建表）后，调用此方法强制重连，
+        让 LangChain 重新读取表结构。
+        """
+        db_uri = cfg['db']['uri']
+        self._db = SQLDatabase.from_uri(db_uri)
+        print("🔄 [DBManager] 数据库连接已刷新，元数据已更新。")
+
     def get_table_info(self, table_names: List[str] = None) -> str:
         all_tables = self._db.get_usable_table_names()
         if not table_names:
@@ -141,7 +141,7 @@ class DBManager:
 
 db_manager = DBManager()
 
-# --- [新增] Schema 检索器 (RAG) ---
+# --- Schema 检索器 (RAG) ---
 class SchemaRetriever:
     _instance = None
     _vector_store = None
@@ -153,40 +153,33 @@ class SchemaRetriever:
         return cls._instance
     
     def _initialize_index(self):
-        """构建向量索引：将所有表名和结构向量化"""
-        print("📥 [System] 正在构建 Schema 向量索引 (RAG)...")
-        table_names = db_manager.db.get_usable_table_names()
-        docs = []
-        
-        # 这里为了演示，我们只索引表名和基础 DDL。
-        # 生产环境建议索引表的 COMMENT 注释，以支持模糊语义搜索。
-        for t in table_names:
-            # 获取该表的 DDL 作为内容
-            ddl = db_manager.db.get_table_info([t])
-            # Metadata 记录表名
-            docs.append(Document(page_content=f"Table Name: {t}\nSchema: {ddl}", metadata={"table_name": t}))
+        print("📥 [System] 正在构建 RAG 索引 (OpenAI Embeddings)...")
+        try:
+            table_names = db_manager.db.get_usable_table_names()
+            if not table_names:
+                print("   ⚠️ 警告: 数据库为空，跳过索引。")
+                return
+
+            docs = []
+            for t in table_names:
+                ddl = db_manager.db.get_table_info([t])
+                docs.append(Document(page_content=f"Table: {t}\nSchema: {ddl}", metadata={"table_name": t}))
             
-        if docs:
+            # 使用 OpenAI Embedding
             embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
             self._vector_store = FAISS.from_documents(docs, embeddings)
-            print(f"   ✅ 已索引 {len(docs)} 张表。")
-        else:
-            print("   ⚠️ 警告: 数据库为空，跳过索引构建。")
+            print(f"   ✅ RAG 索引构建成功 ({len(docs)} 表)。")
+        except Exception as e:
+            print(f"   ❌ RAG 索引失败 (请检查 API Key): {e}")
 
     def retrieve_relevant_schemas(self, query: str, top_k: int = 3) -> str:
-        """根据用户问题，检索最相关的表结构"""
         if not self._vector_store:
-            return db_manager.get_table_info() # 兜底：返回所有
-            
-        print(f"   🔍 [RAG] 正在检索与 '{query}' 相关的表...")
+            return db_manager.get_table_info()
+        
+        # print(f"   🔍 [RAG] 检索 Schema: '{query}'")
         docs = self._vector_store.similarity_search(query, k=top_k)
-        
-        retrieved_tables = [d.metadata['table_name'] for d in docs]
-        # 去重
-        retrieved_tables = list(set(retrieved_tables))
-        print(f"   🎯 [RAG] 命中表: {retrieved_tables}")
-        
-        return db_manager.get_table_info(retrieved_tables)
+        retrieved = list(set([d.metadata['table_name'] for d in docs]))
+        return db_manager.get_table_info(retrieved)
 
 # 初始化 RAG 引擎 (启动时加载)
 schema_retriever = SchemaRetriever()
@@ -224,10 +217,9 @@ def check_is_risky(sql: str) -> bool:
     
     sql_upper = sql.upper()
     
-    # 1. [数据破坏风险] DML/DDL 关键词
-    # 文中提到: UPDATE, INSERT, DELETE, DROP TABLE
-    destructive_keywords = ["DELETE", "UPDATE", "DROP", "ALTER", "TRUNCATE", "INSERT", "GRANT", "REVOKE"]
-    for kw in destructive_keywords:
+    # 1. [数据破坏风险] DML/DDL 关键词 UPDATE, INSERT, DELETE, DROP TABLE
+    risky_keywords = ["DELETE", "UPDATE", "DROP", "ALTER", "TRUNCATE", "INSERT", "GRANT", "REVOKE"]
+    for kw in risky_keywords:
         if kw in sql_upper:
             print(f"   🛡️ [Security] 拦截破坏性操作: {kw}")
             return True
@@ -282,7 +274,7 @@ def parse_intent_node(state: AgentState):
         prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("human", "{input}")])
         result = (prompt | structured_llm).invoke({"input": state['user_input']})
         print(f"   ✅ 意图: {result.query_type}")
-        return {"intent": result.dict()}
+        return {"intent": result.model_dump()}
     except Exception as e:
         return {"error": f"Intent Error: {e}"}
 
@@ -344,7 +336,15 @@ def generate_sql_node(state: AgentState):
     
     try:
         response = (prompt | llm).invoke({})
-        sql = response.content.strip().replace("```sql", "").replace("```", "")
+        raw_content = response.content
+        pattern = r"```(?:sql|sqlite)?\s*(.*?)```"
+        match = re.search(pattern, raw_content, re.DOTALL | re.IGNORECASE)
+        if match:
+            sql = match.group(1).strip()
+        else:
+            # 兜底清洗
+            sql = raw_content.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()
+            
         print(f"   💻 SQL: {sql}")
         return {"generated_sql": sql, "schema_context": schema_context}
     except Exception as e:
@@ -457,12 +457,19 @@ if __name__ == "__main__":
     if "OPENAI_API_KEY" not in os.environ:
         print("⚠️ 请设置 OPENAI_API_KEY")
         
-    # [新增] 启动前先检查并初始化数据库
-    # 这样用户下载代码后，什么都不用做，直接跑就能运行
+    # 1. 自动初始化数据库 (写入数据)
     auto_initialize_database() 
     
-    # 这里的 app 初始化会依赖上面的数据库文件
-    app = build_graph()
+    # 2. [关键修复] 告诉 DBManager 重新读取数据库
+    # 必须加这一步，否则 DBManager 还以为数据库是空的
+    db_manager.refresh_db_connection()
+
+    # 3. 刷新 RAG 索引
+    # 此时 DBManager 已经看到了新表，RAG 就能索引成功了
+    print("🔄 [System] 正在刷新 RAG 索引...")
+    schema_retriever._initialize_index()
+
+    # 4. 构建应用
     app = build_graph()
     
     # 测试 1 模糊表名 (测试 RAG)
@@ -485,3 +492,4 @@ if __name__ == "__main__":
     print("\n" + "-" * 50)
     print("🧨 开始测试高危拦截 (请输入 no 拒绝)...")
     app.invoke({"user_input": "把 Alice 的订单金额全部改成 0"})
+
