@@ -6,6 +6,7 @@ import yaml
 import json
 import datetime
 import logging
+import sqlite3
 from typing import TypedDict, Annotated, List, Literal, Optional
 
 # --- LangChain / LangGraph Imports ---
@@ -16,6 +17,71 @@ from langchain_core.documents import Document
 from langgraph.graph import StateGraph, END
 from langchain_community.utilities import SQLDatabase
 from langchain_community.vectorstores import FAISS
+
+import sqlite3
+import os
+
+# ==========================================
+# 自动初始化数据库
+# ==========================================
+def auto_initialize_database(db_path="ecommerce.db"):
+    """
+    检查数据库是否存在，如果不存在则自动创建并写入测试数据。
+    """
+    if os.path.exists(db_path):
+        print(f"📦 [System] 检测到数据库 {db_path} 已存在，跳过初始化。")
+        return
+
+    print(f"📦 [System] 未检测到数据库，正在自动生成 {db_path} ...")
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # 定义建表和初始化数据的 SQL
+    init_script = """
+    -- 创建 Customers 表
+    CREATE TABLE IF NOT EXISTS customers (
+        id INTEGER PRIMARY KEY, 
+        name VARCHAR(50), 
+        age INTEGER, 
+        city VARCHAR(50)
+    );
+    
+    -- 创建 Orders 表
+    CREATE TABLE IF NOT EXISTS orders (
+        order_id INTEGER PRIMARY KEY, 
+        customer_id INTEGER, 
+        product VARCHAR(50), 
+        amount DECIMAL(10, 2), 
+        order_date DATE,
+        FOREIGN KEY(customer_id) REFERENCES customers(id)
+    );
+    
+    -- 插入测试数据 (Customers)
+    INSERT INTO customers (id, name, age, city) VALUES 
+        (1, 'Alice', 30, 'New York'),
+        (2, 'Bob', 25, 'Los Angeles'),
+        (3, 'Charlie', 35, 'Chicago'),
+        (4, 'Diana', 28, 'New York');
+        
+    -- 插入测试数据 (Orders)
+    INSERT INTO orders (order_id, customer_id, product, amount, order_date) VALUES 
+        (101, 1, 'Laptop', 1200.00, '2023-10-01'),
+        (102, 1, 'Mouse', 25.00, '2023-10-02'),
+        (103, 2, 'Smartphone', 800.00, '2023-10-03'),
+        (104, 1, 'Keyboard', 100.00, '2023-10-05'),
+        (105, 3, 'Headphones', 150.00, '2023-10-06'),
+        (106, 4, 'Monitor', 300.00, '2023-10-07');
+    """
+    
+    try:
+        cursor.executescript(init_script)
+        conn.commit()
+        print(f"   ✅ 数据库初始化完成！已写入测试数据。")
+    except Exception as e:
+        print(f"   ❌ 数据库初始化失败: {e}")
+    finally:
+        conn.close()
 
 # ==========================================
 # 1. 配置加载器
@@ -390,7 +456,13 @@ def build_graph():
 if __name__ == "__main__":
     if "OPENAI_API_KEY" not in os.environ:
         print("⚠️ 请设置 OPENAI_API_KEY")
+        
+    # [新增] 启动前先检查并初始化数据库
+    # 这样用户下载代码后，什么都不用做，直接跑就能运行
+    auto_initialize_database() 
     
+    # 这里的 app 初始化会依赖上面的数据库文件
+    app = build_graph()
     app = build_graph()
     
     # 测试 1 模糊表名 (测试 RAG)
