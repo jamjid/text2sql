@@ -11,4 +11,4 @@ logging:
   file_path: "logs/query_audit.jsonl"
 
 db:
-  uri: "sqlite:///ecommerce.db" # 用户需要自己创建这个数据库
+  uri: "sqlite:///ecommerce.db" 

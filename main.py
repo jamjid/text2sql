@@ -1,7 +1,7 @@
 import os
 from langchain_core.messages import HumanMessage, AIMessage
 
-# 导入模块
+# 导入模块 (确保这些文件都在 src 目录下)
 from src.utils import auto_initialize_database
 from src.database import db_manager, schema_retriever
 from src.graph import build_graph
@@ -11,7 +11,7 @@ def main():
         print("⚠️ 请设置 OPENAI_API_KEY")
         # return 
 
-    # 1. 初始化
+    # 1. 初始化数据库与索引
     auto_initialize_database()
     db_manager.refresh_db_connection()
     schema_retriever._initialize_index()
@@ -19,10 +19,10 @@ def main():
     # 2. 构建图
     app = build_graph()
     
-    # 3. 启动交互循环 (M7: 客户端层面的会话管理)
+    # 3. 启动交互循环
     print("\n" + "="*50)
-    print("🤖 Enterprise Text2SQL Agent (v2.0 Modular)")
-    print("支持多轮对话、RAG 增强、自愈修正")
+    print("🤖 Enterprise Text2SQL Agent (v2.1 Modular)")
+    print("支持多轮对话、RAG 增强、自愈修正、意图澄清")
     print("="*50)
     
     chat_history = [] # 本地会话记录
@@ -42,13 +42,10 @@ def main():
             }
             
             # 执行图
-            final_state = None
             for event in app.stream(inputs):
-                # 实时打印流式输出 (可选)
                 pass
                 
-            # LangGraph 执行完毕，获取最终状态
-            # 注意：langgraph.compile() 默认返回 Runnable，直接 invoke 拿结果
+            # 获取最终结果
             result = app.invoke(inputs)
             final_answer = result.get("final_answer", "No answer")
             
